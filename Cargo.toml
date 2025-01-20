@@ -1,0 +1,36 @@
+[package]
+name = "aptos_parser"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = { version = "0.11", features = ["json"] }
+
+# Асинхронный рантайм
+tokio = { version = "1", features = ["full"] }
+
+# Библиотека для сериализации и десериализации данных
+serde = { version = "1.0", features = ["derive"] }
+
+# Библиотека для работы с JSON-данными
+serde_json = "1.0"
+
+# Логирование
+log = "0.4"
+env_logger = "0.9"
+
+aptos-sdk = { git = "https://github.com/aptos-labs/aptos-core" }
+hex = "0.4"
+url = "2.3"
+futures = "0.3"
+anyhow = "1.0.95"
+
+teloxide = { version = "0.13", features = ["macros"] }
+dotenv = "0.15.0"
+
+rand = "0.7.3"
+rand_core = "0.5.1"
+
+[patch.crates-io]
+merlin = { git = "https://github.com/aptos-labs/merlin" }
+x25519-dalek = { git = "https://github.com/aptos-labs/x25519-dalek" }

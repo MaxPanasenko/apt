@@ -1,0 +1,6 @@
+/target
+/src/.idea
+keys.txt
+.idea
+.env
+.DS_Store
