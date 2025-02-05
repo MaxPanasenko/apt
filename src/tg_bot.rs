@@ -254,14 +254,24 @@ pub async fn run_bot(current_block: u64) {
                 let current_block = guard.current_block;
                 let diff = curr_block - current_block;
 
-                if diff > 3 {
+                if diff > 3 && diff != 18446744073709551615 {
                     guard.current_block = curr_block;
                     let differ = format!("🛠 **Отставание на {diff} блок сокращено");
 
                     if let Err(e) = bot_clone3.send_message(chat_clone3, differ).await {
                         error!("Ошибка при отправке сообщения: {:?}", e);
                     }
-                }
+                } else if diff == 18446744073709551615 {
+                    let response = format!(
+                        "🛠 Текущий обрабатываемый блок: {}\n\
+                        🔢 Текущий блок explorer: {}",
+                        current_block, curr_block
+                    );
+
+                    if let Err(e) = bot_clone3.send_message(chat_clone3, response).await {
+                        error!("Ошибка при отправке сообщения: {:?}", e);
+                    }
+                };
             }
 
             sleep(Duration::from_secs(200)).await;
