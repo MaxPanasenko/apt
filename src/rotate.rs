@@ -1,23 +1,18 @@
-use std::any::Any;
 use crate::utils::save_key;
 use crate::{ErrMsg, ProcessorMessage, SuccessMsg, TryButFailed};
-use aptos_sdk::crypto::ed25519::Ed25519PrivateKey;
-use aptos_sdk::crypto::{PrivateKey, SigningKey, Uniform, ValidCryptoMaterialStringExt};
+use aptos_sdk::crypto::ed25519::{Ed25519PrivateKey};
+use aptos_sdk::crypto::{PrivateKey, Uniform, ValidCryptoMaterialStringExt};
 use aptos_sdk::move_types::account_address::AccountAddress;
 use aptos_sdk::move_types::identifier::Identifier;
 use aptos_sdk::move_types::language_storage::ModuleId;
 use aptos_sdk::types::chain_id::ChainId;
-use aptos_sdk::types::transaction::authenticator::AuthenticationKey;
+use aptos_sdk::types::transaction::authenticator::{ AuthenticationKey};
 use aptos_sdk::types::transaction::{
-    EntryFunction, RawTransaction, SignedTransaction, TransactionPayload,
+    EntryFunction, RawTransaction, TransactionPayload,
 };
-use aptos_sdk::types::AccountKey;
 use aptos_sdk::{bcs, rest_client::Client as AptosClient};
 use rand_core::OsRng;
-use std::fmt::{format, Debug};
 use std::io::Error;
-use serde::Deserialize;
-use tokio::time::Instant;
 use tokio::sync::mpsc;
 use tokio::try_join;
 use aptos_sdk::rest_client::error::RestError;
@@ -29,28 +24,18 @@ pub async fn rotate(
     aptos_rest_client: &AptosClient,
     parser_tx: mpsc::Sender<ProcessorMessage>,
 ) {
-    let start_time = Instant::now();
     parser_tx
-        .send(ProcessorMessage::Progress(format!(
-            "`{old_private_key_without_0x:?}`"
-        ))).await;
+        .send(ProcessorMessage::Progress(format!("0x{old_private_key_without_0x}"))).await;
     let old_private_key_bytes = hex::decode(old_private_key_without_0x).unwrap();
-    let old_private_key =
-        Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
-
-    let old_private_key_clone =
-        Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
-    let old_private_key_clone2 =
-        Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
-
-    let old_account_key_clone = AccountKey::from_private_key(old_private_key);
-    let old_account_address = old_account_key_clone.authentication_key().account_address();
-    let current_public_key = old_private_key_clone.public_key().clone();
+    let sender = Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
+    let sender_pub = sender.public_key();
+    let sender_auth = AuthenticationKey::ed25519(&sender_pub);
+    let sender_addr = sender_auth.account_address();
 
     let (sequence_number, (new_private_key, new_auth_key)) = try_join!(
         async {
             let account = aptos_rest_client
-                .get_account(old_account_address)
+                .get_account(sender_addr.clone())
                 .await
                 .unwrap();
             Ok::<_, Error>(account.inner().sequence_number)
@@ -65,10 +50,7 @@ pub async fn rotate(
     )
     .expect("Cant generate new wallet");
 
-    println!(
-        "new_private_key - {:?}",
-        &new_private_key.to_encoded_string().unwrap()
-    );
+
     let module_address = AccountAddress::from_hex_literal("0x1").unwrap();
     let module_name = Identifier::new("account").unwrap();
     let module_id = ModuleId::new(module_address, module_name);
@@ -82,36 +64,49 @@ pub async fn rotate(
     ));
 
     let raw_transaction = RawTransaction::new(
-        old_account_address,
+        sender_addr,
         sequence_number,
         payload,
-        100000, // gas_limit
-        200,    // gas_price
+        20001, // gas_limit
+        450002,    // gas_price
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs()
-            + 20, // expiration_time
+            + 5, // expiration_time
         ChainId::mainnet(),
     );
 
-    let signature = old_private_key_clone2.sign(&raw_transaction).unwrap();
-    let signed_transaction = SignedTransaction::new(raw_transaction, current_public_key, signature);
+    let fee_pay_private_key_bytes = [103, 249, 197, 16, 73, 28, 88, 169, 190, 189, 141, 9, 148, 221, 64, 55, 141, 200, 130, 145, 140, 180, 180, 32, 176, 206, 42, 241, 233, 125, 181, 86];
 
-    let response = aptos_rest_client.submit_and_wait(&signed_transaction).await;
+    let fee_pay_private_key = Ed25519PrivateKey::try_from(fee_pay_private_key_bytes.as_slice()
+        .clone())
+        .unwrap();
+
+    let new_fee_payer = raw_transaction
+        .clone()
+        .sign_fee_payer(
+            &sender,
+            vec![],
+            vec![],
+            AccountAddress::ZERO,
+            &fee_pay_private_key,
+        )
+        .unwrap()
+        .into_inner();
+
+    let response = aptos_rest_client.submit_and_wait(&new_fee_payer).await;
 
     match response {
         Ok(resp) => {
-            let old_private_key_bytes = hex::decode(old_private_key_without_0x).unwrap();
-            let old_private_key =
-                Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
-            let old_account_key_clone = AccountKey::from_private_key(old_private_key);
-            let old_account_address = old_account_key_clone
-                .authentication_key()
-                .account_address()
-                .to_canonical_string();
-            let elapsed_time = start_time.elapsed();
-            println!("Время выполнения транзакции: {:.2?}", elapsed_time);
+            let old_pub = &sender.public_key();
+            let old_auth = AuthenticationKey::ed25519(&old_pub);
+            let old_addr = old_auth.account_address();
+
+
+
+            let old_account_address = old_addr.to_canonical_string();
+
             save_key(
                 &new_private_key.to_encoded_string().unwrap(),
                 &old_account_address,
@@ -120,8 +115,8 @@ pub async fn rotate(
             .expect("Cant save to Keys.txt");
 
             let msg = SuccessMsg {
-                old_key: old_private_key_clone2.to_encoded_string().unwrap().clone(),
-                old_address: old_account_address.clone(),
+                old_key: sender.to_encoded_string().unwrap().clone(),
+                old_address: old_account_address,
                 new_key: new_private_key.to_encoded_string().unwrap().clone(),
             };
 
@@ -131,16 +126,11 @@ pub async fn rotate(
             match RestError::from(e) {
                 RestError::Api(err) => {
                     if err.error.message.contains("INSUFFICIENT_BALANCE_FOR_TRANSACTION_FEE") {
-                        let old_private_key_bytes = hex::decode(old_private_key_without_0x).unwrap();
-                        let old_private_key =
-                            Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
-                        let old_account_key_clone = AccountKey::from_private_key(old_private_key);
-                        let old_account_address = old_account_key_clone
-                            .authentication_key()
-                            .account_address()
-                            .to_canonical_string();
-                        let elapsed_time = start_time.elapsed();
-                        println!("Время выполнения транзакции: {:.2?}", elapsed_time);
+                        let old_pub = &sender.public_key();
+                        let old_auth = AuthenticationKey::ed25519(&old_pub);
+                        let old_addr = old_auth.account_address();
+                        let old_account_address = old_addr.to_canonical_string();
+
                         save_key(
                             &new_private_key.to_encoded_string().unwrap(),
                             &old_account_address,
@@ -149,8 +139,8 @@ pub async fn rotate(
                             .expect("Cant save to Keys.txt");
 
                         let msg = TryButFailed {
-                            old_key: old_private_key_clone2.to_encoded_string().unwrap().clone(),
-                            old_address: old_account_address.clone(),
+                            old_key: sender.to_encoded_string().unwrap().clone(),
+                            old_address: old_account_address,
                             new_key: new_private_key.to_encoded_string().unwrap().clone(),
                         };
 
@@ -158,7 +148,7 @@ pub async fn rotate(
                     }
                 }
                 RestError::Bcs(err) => {
-                    sendError(old_private_key_clone2.to_encoded_string().unwrap().clone(), err, parser_tx).await;
+                    sendError(sender.to_encoded_string().unwrap().clone(), err, parser_tx).await;
                 }
                 RestError::Json(_) => {
                 }
@@ -171,14 +161,13 @@ pub async fn rotate(
 
 
         }
-        _ => {}
     }
 }
 
 
 async fn sendError(old_key: String, err_msg: bcs::Error, parser_tx:  mpsc::Sender<ProcessorMessage>  ) {
     let msg = ErrMsg {
-        old_key,
+       old_key,
         err: format!("Ошибка : {:?}", err_msg),
     };
     parser_tx.send(ProcessorMessage::Error(msg)).await.expect("Cant send message");

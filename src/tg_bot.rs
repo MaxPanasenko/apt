@@ -1,23 +1,25 @@
 use crate::{parser, AppState, ProcessorMessage};
 use anyhow::{anyhow, Result};
 use dotenv::dotenv;
-use futures::task::SpawnExt;
-use log::{error, info};
+use log::{error};
 use reqwest::Client;
 use serde_json::Value;
 use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::sync::{Arc};
+use tokio::time::sleep;
 use teloxide::dispatching::Dispatcher;
 use teloxide::dispatching::HandlerExt;
 use teloxide::dispatching::UpdateFilterExt;
 use teloxide::types::ChatId;
 use teloxide::utils::command::CommandDescriptions;
-use teloxide::{dispatching, prelude::*, utils::command::BotCommands};
+use teloxide::{prelude::*, utils::command::BotCommands};
+use teloxide::types::ParseMode::MarkdownV2;
 use tokio::sync::watch::Receiver;
 use tokio::sync::{watch, Mutex, mpsc};
-use tokio::time::{self, Duration};
+use tokio::time::{Duration};
+use crate::utils::get_current_block_height;
 
 #[derive(BotCommands, Clone)]
 #[command(rename_rule = "lowercase")]
@@ -52,17 +54,21 @@ async fn handle_command(
 ) -> ResponseResult<()> {
     match command {
         Command::Stats => {
-            let app_state = state.lock().await;
             let curr_bloc = get_current_block_height().await.unwrap_or(0);
+            let current_block = {
+                let guard = state.lock().await;
+                guard.current_block
+            };
+
             let response = format!(
                 "📊 **Текущая статистика**\n\n\
                     🛠 Текущий обрабатываемый блок: {}\n\
                     🔢 Текущий блок explorer: {}",
-                app_state.current_block, curr_bloc
+                current_block, curr_bloc
             );
             if let Err(e) = bot
                 .send_message(message.chat.id, response)
-                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .parse_mode(MarkdownV2)
                 .await
             {
                 error!("Ошибка при отправке статистики: {:?}", e);
@@ -77,10 +83,10 @@ async fn handle_command(
                 .filter_map(|line| line.ok())
                 .collect::<Vec<String>>()
                 .join("\n");
-            let response = format!("🔑 **Содержимое `keys.txt`:**\n\n```\n{}\n```", keys);
+            let response = format!("🔑 **Содержимое `keys.txt`:* \n\n`\n{}\n`", keys);
             if let Err(e) = bot
                 .send_message(message.chat.id, response)
-                .parse_mode(teloxide::types::ParseMode::MarkdownV2)
+                .parse_mode(MarkdownV2)
                 .await
             {
                 error!("Ошибка при отправке ключей: {:?}", e);
@@ -94,10 +100,15 @@ async fn handle_command(
             {
                 error!("Ошибка при отправке сообщения: {:?}", e);
             }
-            let mut app_state = state.lock().await;
             let curr_block = get_current_block_height().await.unwrap();
-            let diff = curr_block - app_state.current_block;
-            app_state.current_block = curr_block;
+            let diff:u64;
+            {
+                let mut guard = state.lock().await;
+                let  current_block = guard.current_block;
+
+                diff = curr_block - current_block;
+                guard.current_block = curr_block;
+            };
 
             let diff = format!("🛠 **Отставание на {diff} блок сокращено");
 
@@ -153,7 +164,10 @@ pub async fn run_bot(current_block: u64) {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (tx, mut rx) = mpsc::channel::<ProcessorMessage>(100);
     let bot_clone2 = bot.clone();
+    let bot_clone3 = bot.clone();
     let chat_clone2 = chat.clone();
+    let chat_clone3 = chat.clone();
+    let state_clone = Arc::clone(&state);
 
     let parser_tx = tx.clone();
     let commands = tokio::spawn(async move {
@@ -165,7 +179,7 @@ pub async fn run_bot(current_block: u64) {
 
         let mut dispatcher = Dispatcher::builder(bot, handler)
             .dependencies(dptree::deps![
-                state.clone(),
+                state_clone,
                 shutdown_rx.clone(),
                 parser_tx.clone()
             ])
@@ -185,37 +199,45 @@ pub async fn run_bot(current_block: u64) {
             match received {
                 ProcessorMessage::Success(msg) => {
                     let response = format!(
-                        "🔑 **Ключ поменян c  `{:?}`\n на `{:?}`\n для адреса `{:?}`",
+                        "🔑 Ключ поменян c  `{}`\n на `{}`\n для адреса `{}`",
                         msg.old_key, msg.new_key, msg.old_address
                     );
-                    match bot_clone2.send_message(chat_clone2, response).await {
+                    match bot_clone2.send_message(chat_clone2, response)
+                        .parse_mode(MarkdownV2)
+                        .await {
                         Ok(_) => println!("Сообщение успешно отправлено."),
                         Err(e) => eprintln!("Ошибка при отправке сообщения {e:?}"),
                     }
                 }
                 ProcessorMessage::Progress(msg) => {
-                    let response = format!("🔑 **Пытаюсь поменять ключ: `{:?}`", msg);
-                    match bot_clone2.send_message(chat_clone2, response).await {
+                    let response = format!("🔑 Пытаюсь поменять ключ: `{}`", msg);
+                    match bot_clone2.send_message(chat_clone2, response)
+                        .parse_mode(MarkdownV2)
+                        .await {
                         Ok(_) => println!("Сообщение успешно отправлено."),
-                        Err(e) => eprintln!("Ошибка при отправке сообщения"),
+                        Err(_) => eprintln!("Ошибка при отправке сообщения"),
                     }
                 }
                 ProcessorMessage::Error(msg) => {
                     let response = format!(
-                        "🔑 **Не удалось поменять ключ: `{:?}` - {:?}",
+                        "🔑 **Не удалось поменять ключ: `{}` - {}",
                         msg.old_key, msg.err
                     );
-                    match bot_clone2.send_message(chat_clone2, response).await {
+                    match bot_clone2.send_message(chat_clone2, response)
+                        .parse_mode(MarkdownV2)
+                        .await {
                         Ok(_) => println!("Сообщение успешно отправлено."),
-                        Err(e) => eprintln!("Ошибка при отправке сообщения"),
+                        Err(_) => eprintln!("Ошибка при отправке сообщения"),
                     }
                 }
                 ProcessorMessage::TryButFailed(msg) => {
                     let response = format!(
-                        "🔑 **Возможно нехватило средств c `{:?}` \n на `{:?}`\n для адреса `{:?}`, но переперьверить",
+                        "🔑 Возможно нехватило средств c `{}` \n на `{}`\n для адреса `{}`, но переперьверить",
                         msg.old_key, msg.new_key, msg.old_address
                     );
-                    match bot_clone2.send_message(chat_clone2, response).await {
+                    match bot_clone2.send_message(chat_clone2, response)
+                        .parse_mode(MarkdownV2)
+                        .await {
                         Ok(_) => println!("Сообщение успешно отправлено."),
                         Err(e) => eprintln!("Ошибка при отправке сообщения {e:?}"),
                     }
@@ -223,67 +245,29 @@ pub async fn run_bot(current_block: u64) {
             }
         }
     });
-    tokio::join!(commands, log);
-}
 
-fn get_initial_line_count(path: &str) -> Result<usize> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let count = reader.lines().count();
-    Ok(count)
-}
+    let self_reboot = tokio::spawn(async move {
+        loop {
+            let curr_block = get_current_block_height().await.unwrap();
+            {
+                let mut guard = state.lock().await;
+                let current_block = guard.current_block;
+                let diff = curr_block - current_block;
 
-fn read_new_lines(path: &str, sent_lines: usize) -> Result<Vec<String>> {
-    let file = File::open(path)?;
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader
-        .lines()
-        .enumerate()
-        .filter_map(|(idx, line)| {
-            if idx >= sent_lines {
-                match line {
-                    Ok(content) => Some(content),
-                    Err(_) => None,
+                if diff > 3 {
+                    guard.current_block = curr_block;
+                    let differ = format!("🛠 **Отставание на {diff} блок сокращено");
+
+                    if let Err(e) = bot_clone3.send_message(chat_clone3, differ).await {
+                        error!("Ошибка при отправке сообщения: {:?}", e);
+                    }
                 }
-            } else {
-                None
             }
-        })
-        .collect();
-    Ok(lines)
-}
 
-fn get_saved_line_count(path: &str) -> Result<usize> {
-    let file = File::open(path)?;
-    let mut reader = BufReader::new(file);
-    let mut content = String::new();
-    reader.read_line(&mut content)?;
-    let count = content
-        .trim()
-        .parse()
-        .map_err(|_| anyhow!("Неверный формат числа в файле состояния"))?;
-    Ok(count)
-}
-
-async fn get_current_block_height() -> Option<u64> {
-    let client = Arc::new(
-        Client::builder()
-            .pool_idle_timeout(None)
-            .pool_max_idle_per_host(100)
-            .build()
-            .expect("Не удалось создать клиент"),
-    );
-    let url = "https://api.mainnet.aptoslabs.com/v1/".to_string();
-
-    if let Ok(response) = client.get(&url).send().await {
-        if let Ok(body) = response.text().await {
-            if let Ok(data) = serde_json::from_str::<Value>(&body) {
-                return data
-                    .get("block_height")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<u64>().ok());
-            }
+            sleep(Duration::from_secs(200)).await;
         }
-    }
-    None
+    });
+
+
+    tokio::join!(commands, log, self_reboot);
 }

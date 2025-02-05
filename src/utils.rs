@@ -12,7 +12,7 @@ pub async fn get_current_block_height() -> Option<u64> {
         .build()
         .expect("Не удалось создать клиент");
 
-    let url = "https://api.mainnet.aptoslabs.com/v1/".to_string();
+    let url = "https://rpc.ankr.com/premium-http/aptos/45d0848dcab4b6b7869874af38fb2990a2fed49b2bcf9c7de78e0fd5df91a1b8/v1".to_string();
 
     if let Ok(response) = client.get(&url).send().await {
         if let Ok(body) = response.text().await {

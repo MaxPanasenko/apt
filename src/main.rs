@@ -2,14 +2,11 @@ mod parser;
 mod rotate;
 mod tg_bot;
 mod utils;
+
+use aptos_sdk::crypto::ed25519::Ed25519PrivateKey;
 use crate::utils::get_current_block_height;
-use anyhow::Result;
-use dotenv::dotenv;
 use env_logger;
-use log::{error, info};
-use std::env;
-use std::sync::mpsc;
-use std::sync::Arc;
+use log::{info};
 use tokio::sync::{watch, Mutex};
 
 
