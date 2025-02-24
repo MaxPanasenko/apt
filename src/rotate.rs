@@ -24,8 +24,14 @@ pub async fn rotate(
     aptos_rest_client: &AptosClient,
     parser_tx: mpsc::Sender<ProcessorMessage>,
 ) {
-    parser_tx
-        .send(ProcessorMessage::Progress(format!("0x{old_private_key_without_0x}"))).await;
+    let key = old_private_key_without_0x.clone().to_owned();
+
+    let parser_tx_clone = parser_tx.clone();
+    tokio::spawn(async move {
+        parser_tx_clone
+            .send(ProcessorMessage::Progress(format!("0x{key}"))).await;
+    });
+
     let old_private_key_bytes = hex::decode(old_private_key_without_0x).unwrap();
     let sender = Ed25519PrivateKey::try_from(old_private_key_bytes.as_slice().clone()).unwrap();
     let sender_pub = sender.public_key();

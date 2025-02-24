@@ -145,7 +145,7 @@ pub async fn run_parser(
     mut shutdown_rx: Receiver<bool>,
     parser_tx: mpsc::Sender<ProcessorMessage>,
 ) {
-    let url_node = "https://rpc.ankr.com/premium-http/aptos/45d0848dcab4b6b7869874af38fb2990a2fed49b2bcf9c7de78e0fd5df91a1b8/v1";
+    let url_node = "http://fullnode:8080/v1";
     let node_url = Url::parse(&url_node).expect("Failed rpc_url");
     let aptos_rest_client = Arc::new(AptosClient::builder(AptosBaseUrl::Custom(node_url)).build());
 
